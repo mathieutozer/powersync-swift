@@ -38,10 +38,15 @@ final class AsyncSemaphore<T: ~Copyable>: Sendable {
     }
 
     fileprivate func returnItems(items: consuming RigidArray<T>) {
-        state.withLock { state in            
+        var wakeups: [CheckedContinuation<(), Never>] = []
+        state.withLock { state in
             while !items.isEmpty {
-                state.returnItem(item: items.removeLast())
+                state.returnItem(item: items.removeLast(), wakeups: &wakeups)
             }
+        }
+        // Resume OUTSIDE the lock — see deactivateWaiter for why.
+        for continuation in wakeups {
+            continuation.resume(returning: ())
         }
     }
 
@@ -106,7 +111,16 @@ private struct SemaphoreState<T: ~Copyable>: ~Copyable {
         assert(lastWaiter == nil)
     }
 
-    private mutating func deactivateWaiter(waiter: SemaphoreWaitNode) {
+    // IMPORTANT: a waiter's continuation must NOT be resumed while the SemaphoreState lock
+    // (and/or the TypedWaitNode lock) is held. Resuming can synchronously run the resumed
+    // task inline on the current thread, which then re-enters the semaphore locks — causing
+    // an ABBA deadlock between the per-node lock and the state lock under contention (every
+    // cooperative-pool DB op then piles up on the state lock forever). So we COLLECT the
+    // continuations to resume into `wakeups` and the lock-holding caller resumes them AFTER
+    // releasing the lock.
+    private mutating func deactivateWaiter(
+        waiter: SemaphoreWaitNode, wakeups: inout [CheckedContinuation<(), Never>]
+    ) {
         if !waiter.isActive {
             return
         }
@@ -131,15 +145,17 @@ private struct SemaphoreState<T: ~Copyable>: ~Copyable {
         }
 
         waiter.isActive = false
-        waiter.continuation.resume(returning: ())
+        wakeups.append(waiter.continuation)
     }
 
-    mutating func returnItem(item: consuming T) {
+    mutating func returnItem(
+        item: consuming T, wakeups: inout [CheckedContinuation<(), Never>]
+    ) {
         // Give it to the next waiter, if possible.
         if let firstWaiter {
             firstWaiter.pushItem(item: item)
             if firstWaiter.isFull {
-                self.deactivateWaiter(waiter: firstWaiter)
+                self.deactivateWaiter(waiter: firstWaiter, wakeups: &wakeups)
             }
         } else {
             // No pending waiter, return lease into pool.
@@ -147,21 +163,28 @@ private struct SemaphoreState<T: ~Copyable>: ~Copyable {
         }
     }
 
-    mutating func returnItems(items: consuming RigidArray<T>) {
+    mutating func returnItems(
+        items: consuming RigidArray<T>, wakeups: inout [CheckedContinuation<(), Never>]
+    ) {
         while !items.isEmpty {
-            returnItem(item: items.removeLast())
+            returnItem(item: items.removeLast(), wakeups: &wakeups)
         }
     }
 
-    mutating func abortWaiter(waiter: SemaphoreWaitNode) {
+    mutating func abortWaiter(
+        waiter: SemaphoreWaitNode, wakeups: inout [CheckedContinuation<(), Never>]
+    ) {
         let items: RigidArray<T>? = waiter.consumeItems()
-        deactivateWaiter(waiter: waiter)
+        deactivateWaiter(waiter: waiter, wakeups: &wakeups)
         if let items {
-            returnItems(items: items)
+            returnItems(items: items, wakeups: &wakeups)
         }
     }
 
-    mutating func addWaiter(requestedItems: Int, continuation: CheckedContinuation<(), Never>) -> SemaphoreWaitNode {
+    mutating func addWaiter(
+        requestedItems: Int, continuation: CheckedContinuation<(), Never>,
+        wakeups: inout [CheckedContinuation<(), Never>]
+    ) -> SemaphoreWaitNode {
         let node = SemaphoreWaitNode(requestedItems: requestedItems, continuation: continuation)
         if let lastWaiter {
             lastWaiter.next = node
@@ -180,7 +203,7 @@ private struct SemaphoreState<T: ~Copyable>: ~Copyable {
         }
 
         if node.isFull {
-            self.deactivateWaiter(waiter: node)
+            self.deactivateWaiter(waiter: node, wakeups: &wakeups)
         }
         return node
     }
@@ -269,26 +292,37 @@ private struct TypedWaitNode<T: ~Copyable>: Sendable, ~Copyable {
     private func acquireInternal(count: Int) async {
         await withTaskCancellationHandler(operation: {
             await withCheckedContinuation { continuation in
+                // Collected under the lock(s), resumed AFTER releasing them — see
+                // SemaphoreState.deactivateWaiter for the deadlock this avoids.
+                var wakeups: [CheckedContinuation<(), Never>] = []
                 inner.withLock { state in
                     if state != nil {
-                        continuation.resume()
+                        wakeups.append(continuation)
                         return
                     }
 
                     let waiter = semaphore.state.withLock { state in
-                        state.addWaiter(requestedItems: count, continuation: continuation)
+                        state.addWaiter(
+                            requestedItems: count, continuation: continuation, wakeups: &wakeups)
                     }
                     state = .hasWaiter(waiter)
                 }
+                for resumed in wakeups {
+                    resumed.resume(returning: ())
+                }
             }
         }, onCancel: {
+            var wakeups: [CheckedContinuation<(), Never>] = []
             inner.withLock { state in
                 if case let .hasWaiter(waiter) = state {
                     semaphore.state.withLock { state in
-                        state.abortWaiter(waiter: waiter)
+                        state.abortWaiter(waiter: waiter, wakeups: &wakeups)
                     }
                 }
                 state = .cancelled
+            }
+            for resumed in wakeups {
+                resumed.resume(returning: ())
             }
         })
     }
