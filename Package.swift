@@ -30,6 +30,21 @@ if let corePath = localCoreExtension {
         ))
 }
 
+// The default value normally specifies that the library is compatible with both static and dynamic linking,
+// where the value used is typically specified by the consumer - which is usually defaulted to static linking.
+// It's not straight forward to configure the linking option used by XCode consumers - specifying
+// this additional product allows consumers to add it to their project, forcing dynamic linking.
+// Dynamic linking is particularly important for XCode previews.
+// Not on Windows: a dynamic product there makes every client import PowerSync's symbols from a DLL,
+// even when it links PowerSync statically.
+var dynamicProducts: [Product] {
+    #if os(Windows)
+    []
+    #else
+    [.library(name: "\(packageName)Dynamic", type: .dynamic, targets: ["PowerSync"])]
+    #endif
+}
+
 let package = Package(
     name: packageName,
     platforms: [
@@ -45,20 +60,10 @@ let package = Package(
             targets: ["PowerSync"]
         ),
         .library(
-            name: "\(packageName)Dynamic",
-            // The default value normally specifies that the library is compatible with both static and dynamic linking,
-            // where the value used is typically specified by the consumer - which is usually defaulted to static linking.
-            // It's not straight forward to configure the linking option used by XCode consumers - specifying
-            // this additional product allows consumers to add it to their project, forcing dynamic linking.
-            // Dynamic linking is particularly important for XCode previews.
-            type: .dynamic,
-            targets: ["PowerSync"]
-        ),
-        .library(
             name: "PowerSyncGRDB",
             targets: ["PowerSyncGRDB"]
         )
-    ],
+    ] + dynamicProducts,
     dependencies: conditionalDependencies + [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0"),
         .package(url: "https://github.com/powersync-ja/CSQLite.git", exact: "3.51.2"),
