@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 import Foundation
 
 public protocol AttachmentContextProtocol: Sendable {
@@ -242,3 +244,4 @@ public actor AttachmentContext: AttachmentContextProtocol {
         self.maxArchivedCount = maxArchivedCount
     }
 }
+#endif

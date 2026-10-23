@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 /// Creates a PowerSync Schema table for attachment state
 public func createAttachmentTable(name: String) -> Table {
     return Table(
@@ -15,3 +17,4 @@ public func createAttachmentTable(name: String) -> Table {
         localOnly: true
     )
 }
+#endif

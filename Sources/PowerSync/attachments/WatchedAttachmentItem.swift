@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 
 import Combine
 import Foundation
@@ -37,3 +39,4 @@ public struct WatchedAttachmentItem: Sendable {
         precondition(fileExtension != nil || filename != nil, "Either fileExtension or filename must be provided.")
     }
 }
+#endif

@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 import Combine
 import Foundation
 
@@ -309,3 +311,4 @@ public actor SyncingService: SyncingServiceProtocol {
         }
     }
 }
+#endif

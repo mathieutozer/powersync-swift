@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 import Foundation
 
 /// Error type for PowerSync operations
@@ -95,3 +97,4 @@ public extension LocalStorageAdapter {
         return try await readFile(filePath: filePath, mediaType: nil)
     }
 }
+#endif

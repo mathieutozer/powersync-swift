@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// An internal protocol for HTTP clients.
 /// 
@@ -32,7 +35,7 @@ protocol SyncLineResponseIterator: AsyncIteratorProtocol {
     mutating func next() async throws -> SyncLine?
 }
 
-enum SyncLine {
+enum SyncLine: Sendable {
     case text(contents: String)
     // In the future, we might also want to support splitting BSON objects. Currently, we stream JSON only.
     //case binary(contents: Data)
@@ -42,16 +45,21 @@ struct PlatformHttpClient: HttpClient {
     let session: URLSession
     
     func receiveSyncLines(request: URLRequest) async throws -> (HTTPURLResponse, any SyncLineResponse) {
+        #if canImport(FoundationNetworking)
+        // swift-corelibs-foundation (Windows, Linux) has no `URLSession.bytes(for:)`, so a session
+        // delegate splits the body into lines instead.
+        let (response, lines) = try await DelegateSyncLines.start(request: request)
+        do {
+            try Self.checkSyncLinesMimeType(response)
+        } catch {
+            lines.cancel()
+            throw error
+        }
+        return (response, lines)
+        #else
         let (bytes, originalResponse) = try await session.bytes(for: request)
         let response = originalResponse as! HTTPURLResponse
-        let jsonStreamMimeType = "application/x-ndjson"
-
-        if response.mimeType != jsonStreamMimeType {
-            throw UnexpectedResponseError(
-                response: response,
-                message: "Invalid sync lines response, (expected \(jsonStreamMimeType), got \(response.mimeType, default: "")"
-            )
-        }
+        try Self.checkSyncLinesMimeType(response)
 
         struct PlatformSyncLineResponse<Base>: SyncLineResponse where Base : AsyncSequence, Base.Element == UInt8, Base: Sendable {
             let lines: AsyncLineSequence<Base>
@@ -73,6 +81,17 @@ struct PlatformHttpClient: HttpClient {
         }
 
         return (response, PlatformSyncLineResponse(lines: bytes.lines))
+        #endif
+    }
+
+    private static func checkSyncLinesMimeType(_ response: HTTPURLResponse) throws {
+        let jsonStreamMimeType = "application/x-ndjson"
+        if response.mimeType != jsonStreamMimeType {
+            throw UnexpectedResponseError(
+                response: response,
+                message: "Invalid sync lines response, (expected \(jsonStreamMimeType), got \(response.mimeType, default: "")"
+            )
+        }
     }
     
     func readFully(request: URLRequest) async throws -> (HTTPURLResponse, Data) {
@@ -82,6 +101,113 @@ struct PlatformHttpClient: HttpClient {
     
     static let shared = PlatformHttpClient(session: .shared)
 }
+
+#if canImport(FoundationNetworking)
+/// Sync lines from a response body streamed by ``DelegateSyncLines``.
+private struct DelegateSyncLineResponse: SyncLineResponse {
+    let stream: AsyncThrowingStream<SyncLine, any Error>
+    let continuation: AsyncThrowingStream<SyncLine, any Error>.Continuation
+
+    func makeAsyncIterator() -> DelegateSyncLineResponseIterator {
+        DelegateSyncLineResponseIterator(inner: stream.makeAsyncIterator())
+    }
+
+    /// Stops the request.
+    func cancel() {
+        continuation.finish()
+    }
+}
+
+private struct DelegateSyncLineResponseIterator: SyncLineResponseIterator {
+    typealias Element = SyncLine
+
+    var inner: AsyncThrowingStream<SyncLine, any Error>.AsyncIterator
+
+    mutating func next() async throws -> SyncLine? {
+        try await inner.next()
+    }
+}
+
+/// Streams a response body as newline-separated sync lines from `URLSessionDataDelegate` callbacks.
+private final class DelegateSyncLines: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    // Only touched from the session's serial delegate queue.
+    private var response: CheckedContinuation<HTTPURLResponse, any Error>?
+    private let lines: AsyncThrowingStream<SyncLine, any Error>.Continuation
+    private var buffer = Data()
+
+    private init(
+        response: CheckedContinuation<HTTPURLResponse, any Error>,
+        lines: AsyncThrowingStream<SyncLine, any Error>.Continuation
+    ) {
+        self.response = response
+        self.lines = lines
+    }
+
+    /// Starts `request` and returns its response once the headers arrive. Finishing or dropping the
+    /// returned lines cancels the request.
+    static func start(request: URLRequest) async throws -> (HTTPURLResponse, DelegateSyncLineResponse) {
+        let (stream, lines) = AsyncThrowingStream<SyncLine, any Error>.makeStream()
+        let response = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let delegate = DelegateSyncLines(response: continuation, lines: lines)
+                let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+                let task = session.dataTask(with: request)
+                lines.onTermination = { _ in
+                    task.cancel()
+                    session.invalidateAndCancel()
+                }
+                task.resume()
+            }
+        } onCancel: {
+            lines.finish()
+        }
+        return (response, DelegateSyncLineResponse(stream: stream, continuation: lines))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let http = response as? HTTPURLResponse else {
+            self.response?.resume(throwing: URLError(.badServerResponse))
+            self.response = nil
+            completionHandler(.cancel)
+            return
+        }
+        self.response?.resume(returning: http)
+        self.response = nil
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        buffer.append(data)
+        while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+            yieldLine(buffer[buffer.startIndex..<newline])
+            buffer.removeSubrange(buffer.startIndex...newline)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        if let response {
+            self.response = nil
+            response.resume(throwing: error ?? URLError(.badServerResponse))
+        }
+        yieldLine(buffer)
+        buffer.removeAll()
+        lines.finish(throwing: error)
+        session.finishTasksAndInvalidate()
+    }
+
+    /// Emits one line of the body, without its `\r\n` ending. Blank lines are skipped.
+    private func yieldLine(_ bytes: Data) {
+        guard var line = String(data: bytes, encoding: .utf8) else { return }
+        if line.hasSuffix("\r") { line.removeLast() }
+        if !line.isEmpty { lines.yield(.text(contents: line)) }
+    }
+}
+#endif
 
 /// A wrapper around a ``HttpClient`` emitting log events for responses and sync lines.
 struct LoggingClient: HttpClient {

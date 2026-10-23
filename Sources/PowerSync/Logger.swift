@@ -1,4 +1,7 @@
+import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 /// A log writer which prints to the standard output
 ///
@@ -18,11 +21,15 @@ public final class PrintLogWriter: LogWriterProtocol {
         self.subsystem = subsystem
         self.category = category
 
+        #if canImport(OSLog)
         if #available(iOS 14.0, macOS 11.0, tvOS 14.0, watchOS 7.0, *) {
             logger = Logger(subsystem: subsystem, category: category)
         } else {
             logger = nil
         }
+        #else
+        logger = nil
+        #endif
     }
 
     /// Logs a message with a given severity and optional tag.
@@ -34,6 +41,7 @@ public final class PrintLogWriter: LogWriterProtocol {
         let tagPrefix = tag.map { !$0.isEmpty ? "[\($0)] " : "" } ?? ""
         let formattedMessage = "\(tagPrefix)\(message)"
 
+        #if canImport(OSLog)
         if #available(iOS 14.0, macOS 11.0, tvOS 14.0, watchOS 7.0, *) {
             guard let logger = logger as? Logger else { return }
 
@@ -52,6 +60,9 @@ public final class PrintLogWriter: LogWriterProtocol {
         } else {
             print("\(severity.stringValue): \(formattedMessage)")
         }
+        #else
+        print("\(severity.stringValue): \(formattedMessage)")
+        #endif
     }
 }
 

@@ -1,5 +1,9 @@
 import CSQLite
+#if canImport(Darwin)
 import Darwin
+#elseif os(Windows)
+import ucrt
+#endif
 
 struct NativeSqliteStatement: ~Copyable {
     private var resolvedColumnNames: [String : Int]? = nil

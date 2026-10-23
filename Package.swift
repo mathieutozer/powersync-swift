@@ -81,7 +81,14 @@ let package = Package(
         .target(
             name: "PowerSyncCoreShim",
             dependencies: [
-                .product(name: "PowerSyncSQLiteCore", package: corePackageName),
+                // Apple platforms link the prebuilt xcframework. On Windows the core extension is
+                // `powersync_x64.dll` from the same release, loaded at runtime (see
+                // `registerPowerSyncCoreExtension`).
+                .product(
+                    name: "PowerSyncSQLiteCore", package: corePackageName,
+                    condition: .when(platforms: [
+                        .macOS, .macCatalyst, .iOS, .tvOS, .watchOS, .visionOS,
+                    ])),
             ],
         ),
         .target(

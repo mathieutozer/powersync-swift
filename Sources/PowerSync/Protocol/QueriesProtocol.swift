@@ -1,4 +1,6 @@
+#if canImport(Combine)
 import Combine
+#endif
 import Foundation
 
 public let DEFAULT_WATCH_THROTTLE: TimeInterval = 0.03 // 30ms

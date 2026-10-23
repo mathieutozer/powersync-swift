@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 import Foundation
 
 /**
@@ -81,3 +83,4 @@ public actor FileManagerStorageAdapter: LocalStorageAdapter {
         try fileManager.copyItem(atPath: sourcePath, toPath: targetPath)
     }
 }
+#endif

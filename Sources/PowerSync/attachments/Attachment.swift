@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 /// Enum representing the state of an attachment
 public enum AttachmentState: Int, Sendable {
     /// The attachment has been queued for download from the cloud storage
@@ -142,3 +144,4 @@ public struct Attachment: Sendable {
         )
     }
 }
+#endif

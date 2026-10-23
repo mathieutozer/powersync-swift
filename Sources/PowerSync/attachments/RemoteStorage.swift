@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 import Foundation
 
 /// Adapter for interfacing with remote attachment storage.
@@ -26,3 +28,4 @@ public protocol RemoteStorageAdapter: Sendable {
     /// - Throws: An error if the deletion fails or the file does not exist.
     func deleteFile(attachment: Attachment) async throws
 }
+#endif

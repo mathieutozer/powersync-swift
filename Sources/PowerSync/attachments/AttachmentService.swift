@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 import Foundation
 
 public protocol AttachmentServiceProtocol: Sendable {
@@ -69,3 +71,4 @@ actor AttachmentServiceImpl: AttachmentServiceProtocol {
         try await callback(context)
     }
 }
+#endif

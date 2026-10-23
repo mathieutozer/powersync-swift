@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 import Foundation
 
 /// Handles attachment operation errors.
@@ -62,3 +64,4 @@ public final class DefaultSyncErrorHandler: SyncErrorHandler, Sendable {
         return false
     }
 }
+#endif
