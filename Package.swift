@@ -45,18 +45,16 @@ var dynamicProducts: [Product] {
     #endif
 }
 
-// The GRDB integration is left out on Linux: PowerSyncGRDB imports the Apple SDKs' SQLite3 module,
-// and GRDB would need the system SQLite's headers.
-#if os(Linux)
-let grdbProducts: [Product] = []
-let grdbDependencies: [Package.Dependency] = []
-let grdbTargets: [Target] = []
-#else
-let grdbProducts: [Product] = [.library(name: "PowerSyncGRDB", targets: ["PowerSyncGRDB"])]
-let grdbDependencies: [Package.Dependency] = [
-    .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0")
-]
-let grdbTargets: [Target] = [
+// The GRDB integration is left out of Linux builds: PowerSyncGRDB imports the Apple SDKs' SQLite3
+// module, and GRDB would need the system SQLite's headers. Linux builds opt in with
+// STORYFORGE_LINUX_TARGET=1 rather than this keying on the host: StoryForge's Buck pool evaluates
+// manifests on Linux hosts to build for Apple platforms, which keep the GRDB integration.
+let leavesOutGRDB = Context.environment["STORYFORGE_LINUX_TARGET"] == "1"
+let grdbProducts: [Product] =
+    leavesOutGRDB ? [] : [.library(name: "PowerSyncGRDB", targets: ["PowerSyncGRDB"])]
+let grdbDependencies: [Package.Dependency] =
+    leavesOutGRDB ? [] : [.package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0")]
+let grdbTargets: [Target] = leavesOutGRDB ? [] : [
     .target(
         name: "PowerSyncGRDB",
         dependencies: [
@@ -69,7 +67,6 @@ let grdbTargets: [Target] = [
         dependencies: ["PowerSync", "PowerSyncGRDB"]
     )
 ]
-#endif
 
 let package = Package(
     name: packageName,
