@@ -120,7 +120,11 @@ final class PowerSyncDatabaseImpl: PowerSyncDatabaseProtocol {
     
     func close(deleteDatabase: Bool) async throws {
         try await close()
-        if deleteDatabase, let dbFilename {
+        if deleteDatabase, let dbFilename, dbFilename.hasPrefix("/") {
+            let url = URL(fileURLWithPath: dbFilename)
+            try deleteSQLiteFiles(
+                dbFilename: url.lastPathComponent, in: url.deletingLastPathComponent())
+        } else if deleteDatabase, let dbFilename {
             // We can use the supplied dbLocation when we support that in future
             let directory = try DatabaseLocation.appleDefaultDatabaseDirectory()
             try deleteSQLiteFiles(dbFilename: dbFilename, in: directory)

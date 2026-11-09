@@ -5,7 +5,9 @@ import Foundation
 enum DatabaseLocation {
     case inMemory
     case inDefaultDirectory(name: String)
-    
+    /// An absolute file path, opened as given. Its directory is created when missing.
+    case atPath(String)
+
     func openConnection(writer: Bool) throws -> RawSqliteConnection {
         var db: OpaquePointer?
         let rc: Int32
@@ -15,6 +17,20 @@ enum DatabaseLocation {
         case .inMemory:
             path = ":memory:"
             rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil)
+        case .atPath(let absolutePath):
+            let fileManager = FileManager.default
+            let directory = (absolutePath as NSString).deletingLastPathComponent
+            if !directory.isEmpty && !fileManager.fileExists(atPath: directory) {
+                try fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            }
+
+            path = absolutePath
+            let flags = if writer {
+                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+            } else {
+                SQLITE_OPEN_READONLY
+            }
+            rc = sqlite3_open_v2(path, &db, flags, nil)
         case .inDefaultDirectory(let name):
             let fileManager = FileManager.default
             let databaseDirectory = (try DatabaseLocation.appleDefaultDatabaseDirectory()).path

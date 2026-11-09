@@ -6,7 +6,8 @@ public let DEFAULT_DB_FILENAME = "powersync.db"
 /// Creates a PowerSyncDatabase instance
 /// - Parameters:
 ///   - schema: The database schema
-///   - dbFilename: The database filename. Defaults to "powersync.db"
+///   - dbFilename: The database filename. Defaults to "powersync.db". A name starting with `/` is an
+///     absolute path, opened as given (its directory is created). `:memory:` opens in memory.
 ///   - logger: Optional logging interface
 ///   - initialStatements: An optional list of statements to run as the database is opened.
 /// - Returns: A configured PowerSyncDatabase instance
@@ -18,6 +19,8 @@ public func PowerSyncDatabase(
 ) -> PowerSyncDatabaseProtocol {
     let (location, group) = if dbFilename == ":memory:" {
         (DatabaseLocation.inMemory, DatabaseGroupCollection())
+    } else if dbFilename.hasPrefix("/") {
+        (DatabaseLocation.atPath(dbFilename), .shared)
     } else {
         (DatabaseLocation.inDefaultDirectory(name: dbFilename), .shared)
     }
