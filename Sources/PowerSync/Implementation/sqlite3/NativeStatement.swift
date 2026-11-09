@@ -3,6 +3,8 @@ import CSQLite
 import Darwin
 #elseif os(Windows)
 import ucrt
+#elseif os(Linux)
+import Glibc
 #endif
 
 struct NativeSqliteStatement: ~Copyable {

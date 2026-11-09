@@ -1,3 +1,5 @@
+// The attachment helpers are built on Combine, which only Apple platforms have.
+#if canImport(Combine)
 @testable import PowerSync
 import XCTest
 
@@ -314,3 +316,4 @@ func waitFor(
         lastError: lastError
     )
 }
+#endif

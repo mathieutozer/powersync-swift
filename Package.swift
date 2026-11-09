@@ -45,6 +45,32 @@ var dynamicProducts: [Product] {
     #endif
 }
 
+// The GRDB integration is left out on Linux: PowerSyncGRDB imports the Apple SDKs' SQLite3 module,
+// and GRDB would need the system SQLite's headers.
+#if os(Linux)
+let grdbProducts: [Product] = []
+let grdbDependencies: [Package.Dependency] = []
+let grdbTargets: [Target] = []
+#else
+let grdbProducts: [Product] = [.library(name: "PowerSyncGRDB", targets: ["PowerSyncGRDB"])]
+let grdbDependencies: [Package.Dependency] = [
+    .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0")
+]
+let grdbTargets: [Target] = [
+    .target(
+        name: "PowerSyncGRDB",
+        dependencies: [
+            .target(name: "PowerSync"),
+            .product(name: "GRDB", package: "GRDB.swift")
+        ]
+    ),
+    .testTarget(
+        name: "PowerSyncGRDBTests",
+        dependencies: ["PowerSync", "PowerSyncGRDB"]
+    )
+]
+#endif
+
 let package = Package(
     name: packageName,
     platforms: [
@@ -58,14 +84,9 @@ let package = Package(
         .library(
             name: packageName,
             targets: ["PowerSync"]
-        ),
-        .library(
-            name: "PowerSyncGRDB",
-            targets: ["PowerSyncGRDB"]
         )
-    ] + dynamicProducts,
-    dependencies: conditionalDependencies + [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0"),
+    ] + grdbProducts + dynamicProducts,
+    dependencies: conditionalDependencies + grdbDependencies + [
         .package(url: "https://github.com/powersync-ja/CSQLite.git", exact: "3.51.2"),
         .package(url: "https://github.com/apple/swift-async-algorithms.git", from: "1.1.0"),
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.4.0")
@@ -86,9 +107,9 @@ let package = Package(
         .target(
             name: "PowerSyncCoreShim",
             dependencies: [
-                // Apple platforms link the prebuilt xcframework. On Windows the core extension is
-                // `powersync_x64.dll` from the same release, loaded at runtime (see
-                // `registerPowerSyncCoreExtension`).
+                // Apple platforms link the prebuilt xcframework. On Windows and Linux the core
+                // extension is the release's `powersync_x64.dll` or `libpowersync_x64.so`, loaded
+                // at runtime (see `registerPowerSyncCoreExtension`).
                 .product(
                     name: "PowerSyncSQLiteCore", package: corePackageName,
                     condition: .when(platforms: [
@@ -96,20 +117,9 @@ let package = Package(
                     ])),
             ],
         ),
-        .target(
-            name: "PowerSyncGRDB",
-            dependencies: [
-                .target(name: "PowerSync"),
-                .product(name: "GRDB", package: "GRDB.swift")
-            ]
-        ),
         .testTarget(
             name: "PowerSyncTests",
             dependencies: ["PowerSync"]
-        ),
-        .testTarget(
-            name: "PowerSyncGRDBTests",
-            dependencies: ["PowerSync", "PowerSyncGRDB"]
         )
-    ] + conditionalTargets
+    ] + grdbTargets + conditionalTargets
 )

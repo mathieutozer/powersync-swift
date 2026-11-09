@@ -1,5 +1,8 @@
 import AsyncAlgorithms
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import PowerSync
 import Testing
 
@@ -24,7 +27,8 @@ final class MockHttpClient: HttpClient {
         try #require(request.url?.path == "/sync/stream")
 
         let channel = try await handleSyncLines(request)
-        let response = HTTPURLResponse(url: request.url!, mimeType: "application/x-ndjson", expectedContentLength: 0, textEncodingName: "utf-8")
+        // This initializer (unlike the mimeType one) exists on Linux too.
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/x-ndjson"])!
 
         return (response, MockSyncLineResponse(inner: channel))
     }
@@ -37,7 +41,7 @@ final class MockHttpClient: HttpClient {
         let body = WriteCheckpointResponse(data: WriteCheckpointData(write_checkpoint: String(checkpoint)))
 
         let data = try StreamingSyncClient.jsonEncoder.encode(body)
-        let response = HTTPURLResponse(url: request.url!, mimeType: "application/json", expectedContentLength: data.count, textEncodingName: "utf-8")
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
 
         return (response, data)
     }

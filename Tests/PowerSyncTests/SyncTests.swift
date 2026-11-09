@@ -1,5 +1,8 @@
 import AsyncAlgorithms
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import PowerSync
 import Testing
 

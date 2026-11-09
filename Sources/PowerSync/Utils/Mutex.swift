@@ -56,4 +56,34 @@ struct Mutex<T: ~Copyable>: @unchecked Sendable, ~Copyable {
         return try action(&value.pointee)
     }
 }
+#elseif os(Linux)
+import Glibc
+
+/// A backport of `Mutex` from the `Synchronization` module, over a pthread mutex.
+struct Mutex<T: ~Copyable>: @unchecked Sendable, ~Copyable {
+    // Behind a pointer so the pthread_mutex_t has a stable address.
+    private let mutex = UnsafeMutablePointer<pthread_mutex_t>.allocate(capacity: 1)
+    private let value: UnsafeMutablePointer<T> = .allocate(capacity: 1)
+
+    init(_ value: consuming T) {
+        self.mutex.initialize(to: pthread_mutex_t())
+        pthread_mutex_init(self.mutex, nil)
+        self.value.initialize(to: value)
+    }
+
+    deinit {
+        pthread_mutex_destroy(self.mutex)
+        self.mutex.deinitialize(count: 1)
+        self.mutex.deallocate()
+        self.value.deinitialize(count: 1)
+        self.value.deallocate()
+    }
+
+    func withLock<R: ~Copyable>(_ action: (_ value: inout T) throws -> R) rethrows -> R {
+        pthread_mutex_lock(self.mutex)
+        defer { pthread_mutex_unlock(self.mutex) }
+
+        return try action(&value.pointee)
+    }
+}
 #endif
