@@ -129,7 +129,14 @@ private struct DelegateSyncLineResponseIterator: SyncLineResponseIterator {
 }
 
 /// Streams a response body as newline-separated sync lines from `URLSessionDataDelegate` callbacks.
-private final class DelegateSyncLines: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+///
+/// Every stream goes through one session that lives as long as the process and is never
+/// invalidated; its delegate (``SyncLinesRouter``) hands each task's callbacks to that task's
+/// ``DelegateSyncLines``. swift-corelibs-foundation aborts the process when a `URLSession` is freed
+/// while its curl multi handle still holds a connection ("_MultiHandle deallocated with non-zero
+/// retain count"), which a session per stream, invalidated and freed when the stream was cancelled
+/// (a disconnect, or a database closing), did.
+private final class DelegateSyncLines: @unchecked Sendable {
     // Only touched from the session's serial delegate queue.
     private var response: CheckedContinuation<HTTPURLResponse, any Error>?
     private let lines: AsyncThrowingStream<SyncLine, any Error>.Continuation
@@ -144,18 +151,16 @@ private final class DelegateSyncLines: NSObject, URLSessionDataDelegate, @unchec
     }
 
     /// Starts `request` and returns its response once the headers arrive. Finishing or dropping the
-    /// returned lines cancels the request.
+    /// returned lines cancels the request (the shared session stays).
     static func start(request: URLRequest) async throws -> (HTTPURLResponse, DelegateSyncLineResponse) {
         let (stream, lines) = AsyncThrowingStream<SyncLine, any Error>.makeStream()
         let response = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let delegate = DelegateSyncLines(response: continuation, lines: lines)
-                let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+                let session = SyncLinesRouter.session
                 let task = session.dataTask(with: request)
-                lines.onTermination = { _ in
-                    task.cancel()
-                    session.invalidateAndCancel()
-                }
+                SyncLinesRouter.shared.register(
+                    DelegateSyncLines(response: continuation, lines: lines), for: task.taskIdentifier)
+                lines.onTermination = { _ in task.cancel() }
                 task.resume()
             }
         } onCancel: {
@@ -164,10 +169,8 @@ private final class DelegateSyncLines: NSObject, URLSessionDataDelegate, @unchec
         return (response, DelegateSyncLineResponse(stream: stream, continuation: lines))
     }
 
-    func urlSession(
-        _ session: URLSession,
-        dataTask: URLSessionDataTask,
-        didReceive response: URLResponse,
+    fileprivate func didReceive(
+        _ response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
         guard let http = response as? HTTPURLResponse else {
@@ -181,7 +184,7 @@ private final class DelegateSyncLines: NSObject, URLSessionDataDelegate, @unchec
         completionHandler(.allow)
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    fileprivate func didReceive(_ data: Data) {
         buffer.append(data)
         while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
             yieldLine(buffer[buffer.startIndex..<newline])
@@ -189,7 +192,7 @@ private final class DelegateSyncLines: NSObject, URLSessionDataDelegate, @unchec
         }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+    fileprivate func didComplete(_ error: (any Error)?) {
         if let response {
             self.response = nil
             response.resume(throwing: error ?? URLError(.badServerResponse))
@@ -197,7 +200,6 @@ private final class DelegateSyncLines: NSObject, URLSessionDataDelegate, @unchec
         yieldLine(buffer)
         buffer.removeAll()
         lines.finish(throwing: error)
-        session.finishTasksAndInvalidate()
     }
 
     /// Emits one line of the body, without its `\r\n` ending. Blank lines are skipped.
@@ -205,6 +207,50 @@ private final class DelegateSyncLines: NSObject, URLSessionDataDelegate, @unchec
         guard var line = String(data: bytes, encoding: .utf8) else { return }
         if line.hasSuffix("\r") { line.removeLast() }
         if !line.isEmpty { lines.yield(.text(contents: line)) }
+    }
+}
+
+/// The delegate of the one session every sync stream goes through: routes each task's callbacks
+/// to its ``DelegateSyncLines`` and forgets it once the task completes.
+private final class SyncLinesRouter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    static let shared = SyncLinesRouter()
+    /// Kept for the process's life: never invalidated, so never freed (see ``DelegateSyncLines``).
+    static let session = URLSession(configuration: .default, delegate: shared, delegateQueue: nil)
+
+    private let lock = NSLock()
+    private var routes: [Int: DelegateSyncLines] = [:]
+
+    func register(_ lines: DelegateSyncLines, for task: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        routes[task] = lines
+    }
+
+    private func route(_ task: URLSessionTask, removing: Bool = false) -> DelegateSyncLines? {
+        lock.lock()
+        defer { lock.unlock() }
+        return removing ? routes.removeValue(forKey: task.taskIdentifier) : routes[task.taskIdentifier]
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let lines = route(dataTask) else {
+            completionHandler(.cancel)
+            return
+        }
+        lines.didReceive(response, completionHandler: completionHandler)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        route(dataTask)?.didReceive(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        route(task, removing: true)?.didComplete(error)
     }
 }
 #endif
