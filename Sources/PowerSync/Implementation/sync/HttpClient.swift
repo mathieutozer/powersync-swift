@@ -153,6 +153,7 @@ private final class DelegateSyncLines: @unchecked Sendable {
     /// Starts `request` and returns its response once the headers arrive. Finishing or dropping the
     /// returned lines cancels the request (the shared session stays).
     static func start(request: URLRequest) async throws -> (HTTPURLResponse, DelegateSyncLineResponse) {
+        try Task.checkCancellation()
         let (stream, lines) = AsyncThrowingStream<SyncLine, any Error>.makeStream()
         let response = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -160,8 +161,11 @@ private final class DelegateSyncLines: @unchecked Sendable {
                 let task = session.dataTask(with: request)
                 SyncLinesRouter.shared.register(
                     DelegateSyncLines(response: continuation, lines: lines), for: task.taskIdentifier)
-                lines.onTermination = { _ in task.cancel() }
+                // Resumed before the cancel is hooked up: a stream already finished (the caller
+                // cancelled meanwhile) runs `onTermination` at once, and a task cancelled before it
+                // was ever resumed may never report its completion on swift-corelibs-foundation.
                 task.resume()
+                lines.onTermination = { _ in task.cancel() }
             }
         } onCancel: {
             lines.finish()

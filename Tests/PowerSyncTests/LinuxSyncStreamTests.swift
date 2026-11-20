@@ -59,6 +59,20 @@ struct LinuxSyncStreamTests {
         }
         try await Task.sleep(for: .milliseconds(500))
     }
+
+    @Test func aCallerAlreadyCancelledStartsNoRequest() async throws {
+        let server = try EndlessLinesServer()
+        defer { server.stop() }
+        let client = PlatformHttpClient.shared
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(server.port)/sync/stream")!)
+        request.httpMethod = "POST"
+        let caller = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await client.receiveSyncLines(request: request)
+        }
+        await #expect(throws: CancellationError.self) { _ = try await caller.value }
+        #expect(server.acceptedCount == 0)
+    }
 }
 
 /// A plain HTTP/1.1 server on 127.0.0.1 that answers every request with an ndjson body sent in
@@ -68,6 +82,7 @@ private final class EndlessLinesServer: @unchecked Sendable {
     private let listener: Int32
     private let lock = NSLock()
     private var stopped = false
+    private var accepted = 0
 
     init() throws {
         let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
@@ -96,6 +111,12 @@ private final class EndlessLinesServer: @unchecked Sendable {
         thread.start()
     }
 
+    var acceptedCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return accepted
+    }
+
     private var isStopped: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -114,6 +135,9 @@ private final class EndlessLinesServer: @unchecked Sendable {
         while !isStopped {
             let connection = accept(listener, nil, nil)
             guard connection >= 0 else { return }
+            lock.lock()
+            accepted += 1
+            lock.unlock()
             let thread = Thread { [self] in serve(connection) }
             thread.start()
         }
